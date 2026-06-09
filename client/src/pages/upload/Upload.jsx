@@ -1,10 +1,30 @@
 import React, { useState, useRef, useEffect } from 'react';
 import api from '../../services/api';
 // Use lucide-react as requested
-import { Edit2, Trash2, ChevronDown, Plus, UploadCloud, FileText } from 'lucide-react';
+import { Edit2, Trash2, ChevronDown, Plus, UploadCloud, FileText, AlertTriangle, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { normalizeData } from '../../utils/mapper';
+
+// --- DYNAMIC VALIDATION RULES DICTIONARY ---
+const REPORT_VALIDATION_RULES = {
+    // --- AMAZON ---
+    "Amazon B2B Sales": { required: ["buyer", "gst"], forbidden: [] },
+    "Amazon B2C Sales": { required: [], forbidden: ["buyer", "gst id"] },
+    "Amazon Settlement": { required: ["settlement id", "type"], forbidden: [] },
+
+    // --- FLIPKART ---
+    "Flipkart Order Report": { required: ["order_item_id", "hsn"], forbidden: ["return_id"] },
+    "Flipkart Return Report": { required: ["return_id"], forbidden: [] },
+    "Flipkart Settlement": { required: ["settlement_ref_no"], forbidden: [] },
+
+    // --- MEESHO ---
+    "Meesho Forward": { required: ["sub order no", "awb number"], forbidden: ["return tracking number"] },
+    "Meesho Return": { required: ["return tracking number"], forbidden: [] },
+
+    // --- GENERIC ---
+    "Generic Sales": { required: [], forbidden: [] }
+};
 
 const Upload = () => {
     const navigate = useNavigate();
@@ -21,6 +41,13 @@ const Upload = () => {
     // UI States
     const [openDropdown, setOpenDropdown] = useState(null);
     const [isUploading, setIsUploading] = useState(false);
+
+    // --- NAYA STATE: Validation Popup ke liye ---
+    const [validationModal, setValidationModal] = useState({
+        isOpen: false,
+        errors: [],
+        pendingData: null
+    });
 
     // State for Modal
     const [modal, setModal] = useState({
@@ -137,9 +164,43 @@ const Upload = () => {
         }
     };
 
-    // --- 6. UPLOAD LOGIC ---
+    // --- 6. UPLOAD & VALIDATION LOGIC ---
     const handleFileChange = (e) => {
         if (e.target.files && e.target.files[0]) setSelectedFile(e.target.files[0]);
+    };
+
+    // Actual upload backend API aur navigation idhar hoga
+    const processFinalUpload = async (mappedData) => {
+        setIsUploading(true);
+        try {
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+            formData.append('marketplace_id', selectedMarketplace.id);
+            formData.append('report_type_id', selectedReportType.id);
+
+            const response = await api.post('/uploadFile', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+
+            if (response.data.success) {
+                alert('File uploaded successfully!');
+                const isSettlement = selectedReportType.name.toLowerCase().includes('settlement') || selectedReportType.name.toLowerCase().includes('transaction');
+
+                navigate('/order', {
+                    state: {
+                        previewData: mappedData,
+                        uploadId: response.data.data.uploadId,
+                        reportCategory: isSettlement ? 'settlement' : 'sales'
+                    }
+                });
+            }
+        } catch (error) {
+            console.error("Upload error:", error);
+            alert("Error uploading file to database!");
+        } finally {
+            setIsUploading(false);
+            setValidationModal({ isOpen: false, errors: [], pendingData: null });
+        }
     };
 
     const handleUploadSubmit = async () => {
@@ -147,55 +208,112 @@ const Upload = () => {
         setIsUploading(true);
 
         try {
-            // 1. File ko frontend par Read karna (XLSX package use karke)
             const reader = new FileReader();
             reader.onload = async (e) => {
                 const data = new Uint8Array(e.target.result);
                 const workbook = XLSX.read(data, { type: 'array' });
-
-                // Peli sheet ka data nikalna
                 const sheetName = workbook.SheetNames[0];
-                const worksheet = workbook.Sheets[sheetName];
-                const rawJsonData = XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: "" });
+                const rawJsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { raw: false, defval: "" });
 
-                // 2. Data ko Normalize (Clean) karna apni Mapper file se
-                // (Maan lijiye selectedMarketplace.name "Amazon" hai)
+                if (rawJsonData.length === 0) {
+                    alert("File is empty!");
+                    setIsUploading(false);
+                    return;
+                }
+
+                // ==========================================
+                // --- NAYA: HEADER VALIDATION LOGIC START ---
+                // ==========================================
+                const fileHeaders = Object.keys(rawJsonData[0]);
+                const normalizeText = (text) => String(text).toLowerCase().replace(/[^a-z0-9]/g, '');
+                const normalizedFileHeaders = fileHeaders.map(normalizeText);
+
+                const reportName = selectedReportType.name;
+                const rules = REPORT_VALIDATION_RULES[reportName];
+
+                if (rules) {
+                    const requiredRules = rules.required || [];
+                    const forbiddenRules = rules.forbidden || [];
+
+                    const hasRequired = requiredRules.every(reqHeader =>
+                        normalizedFileHeaders.some(fileHeader => fileHeader.includes(normalizeText(reqHeader)))
+                    );
+
+                    const hasForbidden = forbiddenRules.some(forbHeader =>
+                        normalizedFileHeaders.some(fileHeader => fileHeader.includes(normalizeText(forbHeader)))
+                    );
+
+                    if (!hasRequired || hasForbidden) {
+                        alert(`❌ WRONG FILE DETECTED! \nAapne "${reportName}" select kiya hai, par uploaded file is rule se valid nahi hai.\n\nTip: Please check if you uploaded the correct file.`);
+                        setIsUploading(false);
+                        return; // Yahan se aage processing nahi hogi
+                    }
+                }
+                // ==========================================
+                // --- HEADER VALIDATION LOGIC END ---
+                // ==========================================
+
+                const isSettlement = selectedReportType.name.toLowerCase().includes('settlement') || selectedReportType.name.toLowerCase().includes('transaction');
+
+                let validationErrors = [];
+                if (!isSettlement) {
+                    const getVal = (obj, keys) => {
+                        const lowerObj = {};
+                        for (let k in obj) lowerObj[k.toLowerCase().trim()] = obj[k];
+                        for (let pk of keys) {
+                            if (lowerObj[pk.toLowerCase()] !== undefined && lowerObj[pk.toLowerCase()] !== '') return lowerObj[pk.toLowerCase()];
+                        }
+                        return null;
+                    };
+
+                    for (let i = 0; i < rawJsonData.length; i++) {
+                        const row = rawJsonData[i];
+                        const oid = getVal(row, ['order id', 'order_id']);
+                        const sku = getVal(row, ['sku']);
+                        const qty = getVal(row, ['quantity', 'qty', 'item quantity']);
+                        const invAmt = getVal(row, ['invoice amount', 'total amount', 'price after discount', 'price after discount (price before discount-total discount)']);
+                        const taxGross = getVal(row, ['tax ex gross', 'tax exclusive gross', 'taxable value', 'taxable value (final invoice amount -taxes)']);
+                        const totalTax = getVal(row, ['total tax amount', 'total tax', 'tax']);
+
+                        const rowNum = i + 2;
+
+                        if (!oid || String(oid).trim() === '-' || String(oid).trim() === '') validationErrors.push(`Row ${rowNum}: Order ID missing.`);
+                        if (!sku || String(sku).trim() === '-' || String(sku).trim() === '') validationErrors.push(`Row ${rowNum}: SKU missing.`);
+                        if (qty === null || isNaN(Number(qty))) validationErrors.push(`Row ${rowNum}: Quantity invalid/missing.`);
+                        if (invAmt === null || isNaN(parseFloat(String(invAmt).replace(/,/g, '')))) validationErrors.push(`Row ${rowNum}: Invoice Amount invalid.`);
+                        if (taxGross === null || isNaN(parseFloat(String(taxGross).replace(/,/g, '')))) validationErrors.push(`Row ${rowNum}: Tax Ex Gross invalid.`);
+                        if (totalTax === null || isNaN(parseFloat(String(totalTax).replace(/,/g, '')))) validationErrors.push(`Row ${rowNum}: Total Tax invalid.`);
+
+                        // Limit errors to show
+                        if (validationErrors.length >= 15) {
+                            validationErrors.push("...and more errors found. Showing first 15.");
+                            break;
+                        }
+                    }
+                }
+
                 const mappedData = normalizeData(rawJsonData, selectedMarketplace.name);
 
-                // 3. Backend me file save karne ki API call
-                const formData = new FormData();
-                formData.append('file', selectedFile);
-                formData.append('marketplace_id', selectedMarketplace.id);
-                formData.append('report_type_id', selectedReportType.id);
-
-                const response = await api.post('/uploadFile', formData, {
-                    headers: { 'Content-Type': 'multipart/form-data' }
-                });
-
-                if (response.data.success) {
-                    alert('File uploaded successfully!');
-
-                    // 4. Order page par Navigate karna aur mapped data sath bhej dena
-                    const isSettlement = selectedReportType.name.toLowerCase().includes('settlement') || selectedReportType.name.toLowerCase().includes('transaction');
-                    const reportCategory = isSettlement ? 'settlement' : 'sales';
-
-                    navigate('/order', {
-                        state: {
-                            previewData: mappedData,
-                            uploadId: response.data.data.uploadId,
-                            reportCategory: reportCategory // <-- NAYA ADD KIYA
-                        }
+                // Agar andar ka data missing hai (Row Validation), toh Popup dikhao
+                if (validationErrors.length > 0) {
+                    setIsUploading(false);
+                    setValidationModal({
+                        isOpen: true,
+                        errors: validationErrors,
+                        pendingData: mappedData
                     });
+                    return;
                 }
-                setIsUploading(false);
+
+                // Agar sab sahi hai toh final upload function call karo
+                await processFinalUpload(mappedData);
             };
 
-            // Ye line file ko read karna start karti hai
             reader.readAsArrayBuffer(selectedFile);
 
         } catch (error) {
-            console.error("Upload error:", error);
-            alert("Error uploading file!");
+            console.error("File processing error:", error);
+            alert("Error processing file!");
             setIsUploading(false);
         }
     };
@@ -427,6 +545,48 @@ const Upload = () => {
                     </div>
                 </div>
             )}
+
+
+            {/* --- VALIDATION WARNING MODAL --- */}
+            {validationModal.isOpen && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-[20px] p-6 w-full max-w-lg shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col max-h-[85vh]">
+                        <div className="flex items-center gap-3 mb-2 text-[#F59E0B]">
+                            <AlertTriangle size={24} />
+                            <h3 className="font-['Sora',sans-serif] text-[18px] font-bold text-[#243463]">Validation Warnings</h3>
+                        </div>
+
+                        <p className="text-[13px] text-[#6B7280] mb-4 border-b border-[#E5E7EB] pb-3">
+                            We found some missing or invalid data in your file. Do you want to ignore these and continue uploading?
+                        </p>
+
+                        <div className="bg-[#FEF3C7]/30 border border-[#FCD34D] rounded-xl p-4 mb-6 overflow-y-auto custom-scrollbar flex-1">
+                            <ul className="list-disc pl-5 text-[12px] text-[#B45309] space-y-1.5 font-medium">
+                                {validationModal.errors.map((err, idx) => (
+                                    <li key={idx}>{err}</li>
+                                ))}
+                            </ul>
+                        </div>
+
+                        <div className="flex gap-3 shrink-0">
+                            <button
+                                onClick={() => setValidationModal({ isOpen: false, errors: [], pendingData: null })}
+                                className="flex-1 py-2.5 rounded-xl font-semibold text-[13px] bg-[#F8FAFC] text-[#6B7280] border border-[#E5E7EB] hover:bg-[#E5E7EB] hover:text-[#243463] transition-colors"
+                            >
+                                Cancel Upload
+                            </button>
+                            <button
+                                onClick={() => processFinalUpload(validationModal.pendingData)}
+                                disabled={isUploading}
+                                className="flex-1 py-2.5 rounded-xl font-semibold text-[13px] bg-[#243463] text-white shadow-md hover:bg-[#1a2548] transition-colors flex justify-center items-center gap-2 disabled:opacity-70"
+                            >
+                                {isUploading ? <Loader2 size={14} className="animate-spin" /> : 'Ignore & Continue'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
         </div>
     )
 }

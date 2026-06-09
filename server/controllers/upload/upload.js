@@ -244,29 +244,44 @@ const saveMappedData = async (req, res) => {
         if (!orders || orders.length === 0) return errorResponse(res, 400, "No data to save");
         const BATCH_SIZE = 500;
 
+
+        // ==========================================
+        // CASE 1: SALES REPORT
+        // ==========================================
         if (reportType === 'sales') {
-            const values = orders.map(order => [
-                uploadId,
-                findValue(order, ['seller gstin', 'gstin']) || '-',
-                formatDateForDB(findValue(order, ['invoice date', 'order date'])),
-                cleanId(findValue(order, ['order id', 'order_item_id'])),
-                findValue(order, ['quantity', 'qty']) || 0,
-                findValue(order, ['item description', 'product name', 'description']) || '-',
-                findValue(order, ['asin', 'fsn']) || '-',
-                findValue(order, ['sku']) || '-',
-                findValue(order, ['ship from postal code', 'pincode', 'ship from pin']) || '-',
-                findValue(order, ['ship to city', 'customer city']) || '-',
-                findValue(order, ['ship to state', 'customer state']) || '-',
-                cleanAmount(findValue(order, ['invoice amount', 'total amount'])),
-                cleanAmount(findValue(order, ['tax exclusive gross', 'taxable value'])),
-                cleanAmount(findValue(order, ['total tax amount', 'tax'])),
-                cleanAmount(findValue(order, ['item promo discount', 'discount', 'promo discount'])),
-                findValue(order, ['warehouse id', 'fulfillment center']) || '-'
-            ]);
+            const values = orders.map(order => {
+                // --- NAYA: Warehouse ID ka logic ---
+                let warehouseVal = findValue(order, ['warehouse id', 'fulfillment center']);
+                // Agar blank, '-', 'na' ya 'NA' ho toh 'crasome' set kar do
+                if (!warehouseVal || warehouseVal.trim() === '-' || warehouseVal.trim() === '' || warehouseVal.trim().toLowerCase() === 'na') {
+                    warehouseVal = 'crasome';
+                }
+
+                return [
+                    uploadId,
+                    findValue(order, ['seller gstin', 'gstin']) || '-',
+                    formatDateForDB(findValue(order, ['invoice date', 'order date', 'Order Date'])),
+                    cleanId(findValue(order, ['order id', 'order_item_id'])),
+                    findValue(order, ['transaction type', 'event type', 'type']) || 'Unknown',
+                    findValue(order, ['quantity', 'qty']) || 0,
+                    findValue(order, ['item description', 'product name', 'description']) || '-',
+                    findValue(order, ['asin', 'fsn']) || '-',
+                    findValue(order, ['sku']) || '-',
+                    findValue(order, ['ship from postal code', 'pincode', 'ship from pin']) || '-',
+                    findValue(order, ['ship to city', 'customer city']) || '-',
+                    findValue(order, ['ship to state', 'customer state']) || '-',
+                    cleanAmount(findValue(order, ['invoice amount', 'total amount'])),
+                    cleanAmount(findValue(order, ['tax exclusive gross', 'taxable value'])),
+                    cleanAmount(findValue(order, ['total tax amount', 'tax'])),
+                    cleanAmount(findValue(order, ['item promo discount', 'discount', 'promo discount'])),                                                   
+
+                    warehouseVal // NAYA: Yahan updated warehouse pass kar diya
+                ];
+            });
 
             const query = `
                 INSERT INTO sales_orders (
-                    upload_id, seller_gstin, invoice_date, order_id, quantity, item_description, 
+                    upload_id, seller_gstin, invoice_date, order_id, transaction_type, quantity, item_description, 
                     asin, sku, ship_from_pin, ship_to_city, ship_to_state, 
                     invoice_amount, tax_ex_gross, total_tax_amount, promo_discount, warehouse_id
                 ) VALUES ?
@@ -340,15 +355,16 @@ const getReconciledOrders = async (req, res) => {
         const query = `
             SELECT 
                 m.name AS 'Marketplace', 
+                r.name AS 'Report Type',
                 s.order_id AS 'Order Id',
                 DATE_FORMAT(s.invoice_date, '%d-%m-%Y') AS 'Invoice Date',                
+                s.transaction_type AS 'Transaction Type',
                 s.sku AS 'Sku',
                 s.quantity AS 'Quantity',
                 s.invoice_amount AS 'Invoice Amount',
                 s.tax_ex_gross AS 'Tax Exclusive Gross',
                 s.total_tax_amount AS 'Total Tax Amount',
                 
-                /* NAYI COLUMNS KA SUM */
                 COALESCE(SUM(t.total_sales_tax), 0) AS 'Sales Tax',
                 COALESCE(SUM(t.tcs_cgst), 0) AS 'TCS-CGST',
                 COALESCE(SUM(t.tcs_sgst), 0) AS 'TCS-SGST',
@@ -367,13 +383,14 @@ const getReconciledOrders = async (req, res) => {
             LEFT JOIN 
                 marketplaces m ON u.marketplace_id = m.id
             LEFT JOIN 
+                report_types r ON u.report_type_id = r.id
+            LEFT JOIN 
                 settlement_transactions t ON TRIM(s.order_id) = TRIM(t.order_id)
             GROUP BY 
-                s.id, m.name, s.order_id, s.invoice_date, s.sku, s.quantity, s.invoice_amount, s.tax_ex_gross, s.total_tax_amount
+                s.id, m.name, r.name, s.order_id, s.invoice_date, s.transaction_type, s.sku, s.quantity, s.invoice_amount, s.tax_ex_gross, s.total_tax_amount
             ORDER BY 
                 s.invoice_date DESC
         `;
-
         const [rows] = await db.query(query);
         return successResponse(res, 200, "Reconciled data fetched successfully", rows);
     } catch (error) {

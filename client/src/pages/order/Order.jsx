@@ -14,43 +14,110 @@ const Order = () => {
     const [mode, setMode] = useState('database');
 
     const [selectedMarketplace, setSelectedMarketplace] = useState('All');
+    const [selectedReportTypeFilter, setSelectedReportTypeFilter] = useState('All'); // NAYA STATE
+
     const [searchTerm, setSearchTerm] = useState('');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
     const [paymentFilter, setPaymentFilter] = useState('All');
     const [orderStatusFilter, setOrderStatusFilter] = useState('All');
 
+    // NAYA STATE: Dynamic Cards filter ke liye
+    const [activeTypeFilter, setActiveTypeFilter] = useState("All");
+
     const [currentPage, setCurrentPage] = useState(1);
     const rowsPerPage = 50;
 
     const reportCategory = location.state?.reportCategory || 'sales';
 
+    // --- NAYA USEEFFECT (Hierarchy Logic ke sath - No Duplicates) ---
     useEffect(() => {
         setIsProcessing(true);
         setTimeout(() => {
             if (location.state && location.state.previewData) {
                 setMode('preview');
                 const rawData = location.state.previewData;
-                const uniqueOrdersMap = new Map();
 
-                rawData.forEach(row => {
-                    if (reportCategory === 'sales') {
-                        const oid = row["Order Id"];
-                        if (!oid || oid === '-') {
-                            uniqueOrdersMap.set(Math.random(), row);
-                        } else {
-                            if (!uniqueOrdersMap.has(oid)) {
-                                uniqueOrdersMap.set(oid, row);
-                            } else if (row["Transaction Type"] === 'Shipment') {
-                                uniqueOrdersMap.set(oid, row);
+                // Step 1 : Group rows by Order Id
+                const orderGroups = new Map();
+
+                rawData.forEach((row) => {
+                    const oid = row["Order Id"] || row["order id"] || row["order_id"];
+
+                    if (!oid || oid === "-") {
+                        orderGroups.set(`temp_${Math.random()}`, [row]);
+                        return;
+                    }
+
+                    if (!orderGroups.has(oid)) {
+                        orderGroups.set(oid, []);
+                    }
+
+                    orderGroups.get(oid).push(row);
+                });
+
+                // Step 2 : Determine final row
+                const uniqueDataArray = [];
+                const manualReviewRows = [];
+
+                orderGroups.forEach((rows, orderId) => {
+                    if (rows.length === 1) {
+                        uniqueDataArray.push(rows[0]);
+                        return;
+                    }
+
+                    const types = rows.map(r =>
+                        String(r["Transaction Type"] || r["transaction type"] || r["type"] || "")
+                            .trim()
+                            .toLowerCase()
+                    );
+
+                    // Hierarchy Checks
+                    const hasRefund = types.some(t => t.includes("refund") || t.includes("return"));
+                    const hasShipment = types.some(t => t.includes("shipment") || t.includes("sale") || t.includes("order"));
+                    const hasCancel = types.some(t => t.includes("cancel"));
+
+                    let finalType = null;
+
+                    // Refund > Shipment > Cancel
+                    if (hasRefund) {
+                        finalType = "Refund";
+                    }
+                    else if (hasShipment) {
+                        finalType = "Shipment";
+                    }
+                    else if (hasCancel) {
+                        finalType = "Cancel";
+                    }
+
+                    let selectedRow = null;
+
+                    if (finalType) {
+                        // Find the exact row that matches the finalType to keep its specific data
+                        selectedRow = rows.find(
+                            r => {
+                                const t = String(r["Transaction Type"] || r["transaction type"] || r["type"] || "").trim().toLowerCase();
+                                if (finalType === "Refund") return t.includes("refund") || t.includes("return");
+                                if (finalType === "Shipment") return t.includes("shipment") || t.includes("sale") || t.includes("order");
+                                if (finalType === "Cancel") return t.includes("cancel");
+                                return false;
                             }
-                        }
-                    } else {
-                        uniqueOrdersMap.set(Math.random(), row);
+                        ) || rows[0];
+
+                        selectedRow.__virtualType = finalType; // Forcefully assign the calculated type
+                        uniqueDataArray.push(selectedRow);
+                    }
+                    else {
+                        rows.forEach(r => {
+                            r.__virtualType = "Manual Review";
+                        });
+                        manualReviewRows.push(...rows);
                     }
                 });
 
-                const uniqueDataArray = Array.from(uniqueOrdersMap.values());
+                // Combine processed rows
+                uniqueDataArray.push(...manualReviewRows);
+
                 setOrders(uniqueDataArray);
                 setIsProcessing(false);
             }
@@ -101,13 +168,16 @@ const Order = () => {
         }
 
         let cols = ['#'];
-        if (mode === 'database') cols.push('Marketplace');
+        if (mode === 'database') {
+            cols.push('Marketplace');
+            cols.push('Report Type'); // NAYA ADD KIYA
+        }
 
         cols.push('Order Id', 'Invoice Date', 'SKU', 'Quantity', 'Invoice Amount', 'Tax Ex Gross', 'Total Tax');
 
-            if (mode === 'database') {
-                cols.push('Sales Tax', 'TCS-CGST', 'TCS-SGST', 'TCS-IGST', 'TDS', 'Commission Fees', 'Shipping + Pick Pack Fees', 'Closing Fees', 'Settlement Total', 'Payment Status', 'Order Status');
-            }
+        if (mode === 'database') {
+            cols.push('Sales Tax', 'TCS-CGST', 'TCS-SGST', 'TCS-IGST', 'TDS', 'Commission Fees', 'Shipping + Pick Pack Fees', 'Closing Fees', 'Settlement Total', 'Payment Status', 'Order Status');
+        }
         return cols;
     };
 
@@ -123,9 +193,9 @@ const Order = () => {
     const cleanAmt = (val) => parseFloat(String(val).replace(/,/g, '')) || 0;
 
     const getColorClass = (amount) => {
-        if (amount > 0) return 'text-[#10B981]'; 
-        if (amount < 0) return 'text-[#EF4444]'; 
-        return 'text-[#6B7280]'; 
+        if (amount > 0) return 'text-[#10B981]';
+        if (amount < 0) return 'text-[#EF4444]';
+        return 'text-[#6B7280]';
     };
 
     const getOrderStatus = (val) => {
@@ -137,13 +207,16 @@ const Order = () => {
     const clearFilters = () => {
         setSearchTerm('');
         setSelectedMarketplace('All');
+        setSelectedReportTypeFilter('All'); // NAYA ADD KIYA
         setStartDate('');
         setEndDate('');
         setPaymentFilter('All');
         setOrderStatusFilter('All');
+        setActiveTypeFilter('All');
     };
 
-    const hasActiveFilters = searchTerm !== '' || selectedMarketplace !== 'All' || startDate !== '' || endDate !== '' || paymentFilter !== 'All' || orderStatusFilter !== 'All';
+    const hasActiveFilters = searchTerm !== '' || selectedMarketplace !== 'All' || selectedReportTypeFilter !== 'All' || startDate !== '' || endDate !== '' || paymentFilter !== 'All' || orderStatusFilter !== 'All' || activeTypeFilter !== 'All';
+
 
     const uniqueMarketplaces = useMemo(() => {
         if (mode !== 'database') return [];
@@ -151,19 +224,124 @@ const Order = () => {
         return ['All', ...Array.from(mps)];
     }, [orders, mode]);
 
+    // --- NAYA USEMEMO ---
+    const uniqueReportTypes = useMemo(() => {
+        if (mode !== 'database') return [];
+        const rts = new Set(orders.map(o => o["Report Type"]).filter(Boolean));
+        return ['All', ...Array.from(rts)];
+    }, [orders, mode]);
+
+    // --- NAYA DYNAMIC STATS USEMEMO ---
+    // --- NAYA DYNAMIC STATS USEMEMO (Ab ye filter hone ke baad ginti karega) ---
+    const { statsData } = useMemo(() => {
+        if (!orders || orders.length === 0) {
+            return { statsData: [{ id: "All", label: "TOTAL ROWS", value: 0, desc: `0 records` }] };
+        }
+
+        // 1. Pehle data ko Marketplace, Report Type aur Date ke hisaab se filter karenge taaki Box ke numbers accurate aayen
+        let baseOrders = orders;
+        if (mode === 'database') {
+            if (selectedMarketplace !== 'All') {
+                baseOrders = baseOrders.filter(o => o["Marketplace"] === selectedMarketplace);
+            }
+            if (selectedReportTypeFilter !== 'All') {
+                baseOrders = baseOrders.filter(o => o["Report Type"] === selectedReportTypeFilter);
+            }
+            if (startDate || endDate) {
+                const start = startDate ? new Date(startDate).getTime() : 0;
+                const end = endDate ? new Date(endDate).getTime() : Infinity;
+                baseOrders = baseOrders.filter(o => {
+                    const dStr = o["Invoice Date"];
+                    if (!dStr) return false;
+                    let orderTime = 0;
+                    if (dStr.includes('-') && dStr.split('-')[2]?.length === 4) {
+                        const [day, month, year] = dStr.split('-');
+                        orderTime = new Date(`${year}-${month}-${day}`).getTime();
+                    } else {
+                        orderTime = new Date(dStr).getTime();
+                    }
+                    return orderTime >= start && orderTime <= end;
+                });
+            }
+        }
+
+        if (baseOrders.length === 0) {
+            return { statsData: [{ id: "All", label: "TOTAL ROWS", value: 0, desc: `0 records` }] };
+        }
+
+        const headers = Object.keys(baseOrders[0]);
+        let typeColName = headers.find(h => {
+            const lower = h.toLowerCase().trim();
+            return lower === "transaction type" || lower === "order status" || lower === "type" || lower === "status";
+        });
+
+        let typeCounts = {};
+
+        baseOrders.forEach(row => {
+            let virtualType = "Unknown";
+
+            if (row.__virtualType) {
+                virtualType = row.__virtualType;
+            }
+            else if (mode === 'database') {
+                const dbType = String(row["Transaction Type"] || "").toLowerCase();
+
+                if (dbType.includes("sale") || dbType.includes("shipment") || dbType.includes("order")) {
+                    virtualType = "Shipment";
+                } else if (dbType.includes("return") || dbType.includes("refund")) {
+                    virtualType = "Refund";
+                } else if (dbType.includes("cancel")) {
+                    virtualType = "Cancel";
+                } else {
+                    virtualType = row["Transaction Type"] || "Others";
+                }
+            }
+            else {
+                if (typeColName && row[typeColName]) {
+                    const val = String(row[typeColName]).trim();
+                    const lowerVal = val.toLowerCase();
+
+                    if (["sale", "order", "shipment", "sales"].includes(lowerVal)) virtualType = "Shipment";
+                    else if (["return", "refund"].includes(lowerVal)) virtualType = "Refund";
+                    else if (["cancel", "cancelled", "cancellation"].includes(lowerVal)) virtualType = "Cancel";
+                    else virtualType = val;
+                } else {
+                    const rowString = Object.values(row).join(" ").toLowerCase();
+                    if (rowString.includes("cancel")) virtualType = "Cancel";
+                    else if (rowString.includes("return") || rowString.includes("refund")) virtualType = "Refund";
+                    else if (rowString.includes("shipment") || rowString.includes("sale")) virtualType = "Shipment";
+                    else virtualType = "Others";
+                }
+            }
+
+            row.__virtualType = virtualType;
+            typeCounts[virtualType] = (typeCounts[virtualType] || 0) + 1;
+        });
+
+        const sData = [
+            { id: "All", label: "TOTAL ROWS", value: baseOrders.length, desc: "Filtered records available." }
+        ];
+
+        Object.keys(typeCounts).sort().forEach(type => {
+            sData.push({ id: type, label: type.toUpperCase(), value: typeCounts[type], desc: `${type} records found.` });
+        });
+
+        return { statsData: sData };
+    }, [orders, mode, selectedMarketplace, selectedReportTypeFilter, startDate, endDate]); // Dependencies updated
+
+
+    // --- UPDATED FILTERED ORDERS (Ab real-time update hoga) ---
     const filteredOrders = useMemo(() => {
         let result = orders;
 
-        if (searchTerm.trim() !== '') {
-            result = result.filter(o => {
-                const oid = o["Order Id"] || o["order id"] || o["order_id"] || '';
-                return String(oid).toLowerCase().includes(searchTerm.toLowerCase());
-            });
-        }
-
+        // 1. Apply Marketplace, Report Type & Date Filters First
         if (mode === 'database') {
             if (selectedMarketplace !== 'All') {
                 result = result.filter(o => o["Marketplace"] === selectedMarketplace);
+            }
+
+            if (selectedReportTypeFilter !== 'All') {
+                result = result.filter(o => o["Report Type"] === selectedReportTypeFilter);
             }
 
             if (startDate || endDate) {
@@ -204,10 +382,22 @@ const Order = () => {
             }
         }
 
-        setCurrentPage(1); 
-        return result;
-    }, [orders, selectedMarketplace, searchTerm, startDate, endDate, paymentFilter, orderStatusFilter, mode]);
+        // 2. Apply Dynamic Box Filter (Shipment/Cancel/Refund)
+        if (activeTypeFilter !== "All") {
+            result = result.filter(o => o.__virtualType === activeTypeFilter);
+        }
 
+        // 3. Apply Search Box Filter
+        if (searchTerm.trim() !== '') {
+            result = result.filter(o => {
+                const oid = o["Order Id"] || o["order id"] || o["order_id"] || '';
+                return String(oid).toLowerCase().includes(searchTerm.toLowerCase());
+            });
+        }
+
+        setCurrentPage(1); // Page reset
+        return result;
+    }, [orders, selectedMarketplace, selectedReportTypeFilter, startDate, endDate, paymentFilter, orderStatusFilter, mode, activeTypeFilter, searchTerm]); // Yahan dependency missing thi jo ab add ho gayi
     const totalPages = Math.ceil(filteredOrders.length / rowsPerPage) || 1;
     const currentRows = useMemo(() => {
         const indexOfLastRow = currentPage * rowsPerPage;
@@ -252,57 +442,96 @@ const Order = () => {
                         </div>
                     </div>
 
-                    {mode === 'database' && (
-                        <div className="flex flex-wrap items-center gap-3 bg-[#F8FAFC] p-3 rounded-xl border border-[#E5E7EB]">
-                            <div className="flex items-center border border-[#E5E7EB] rounded-lg px-3 py-1.5 bg-white min-w-[180px] flex-1">
-                                <Search size={14} className="text-[#6B7280] mr-2" />
-                                <input type="text" placeholder="Search Order ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-transparent border-none outline-none text-[12px] text-[#243463] w-full" />
-                            </div>
+                    {/* --- FILTER BAR (Ab Search box hamesha dikhega) --- */}
+                    <div className="flex flex-wrap items-center gap-3 bg-[#F8FAFC] p-3 rounded-xl border border-[#E5E7EB]">
 
-                            {uniqueMarketplaces.length > 1 && (
+                        {/* SEARCH BAR - Ab Preview me bhi dikhega */}
+                        <div className="flex items-center border border-[#E5E7EB] rounded-lg px-3 py-1.5 bg-white min-w-[180px] flex-1">
+                            <Search size={14} className="text-[#6B7280] mr-2" />
+                            <input type="text" placeholder="Search Order ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-transparent border-none outline-none text-[12px] text-[#243463] w-full" />
+                        </div>
+
+                        {/* BAAKI FILTERS - Sirf Database mode me dikhenge */}
+                        {mode === 'database' && (
+                            <>
+                                {uniqueMarketplaces.length > 1 && (
+                                    <div className="flex items-center border border-[#E5E7EB] rounded-lg px-2 py-1.5 bg-white">
+                                        <Filter size={13} className="text-[#6B7280] mr-1.5" />
+                                        <select value={selectedMarketplace} onChange={(e) => setSelectedMarketplace(e.target.value)} className="bg-transparent border-none outline-none text-[12px] text-[#243463] cursor-pointer">
+                                            {uniqueMarketplaces.map((mp, i) => <option key={i} value={mp}>{mp === 'All' ? 'Platform: All' : mp}</option>)}
+                                        </select>
+                                    </div>
+                                )}
+
+                                {/* --- NAYA DROPDOWN --- */}
+                                {uniqueReportTypes.length > 1 && (
+                                    <div className="flex items-center border border-[#E5E7EB] rounded-lg px-2 py-1.5 bg-white">
+                                        <Filter size={13} className="text-[#6B7280] mr-1.5" />
+                                        <select value={selectedReportTypeFilter} onChange={(e) => setSelectedReportTypeFilter(e.target.value)} className="bg-transparent border-none outline-none text-[12px] text-[#243463] cursor-pointer">
+                                            {uniqueReportTypes.map((rt, i) => <option key={i} value={rt}>{rt === 'All' ? 'Report: All' : rt}</option>)}
+                                        </select>
+                                    </div>
+                                )}
+
+                                <div className="flex items-center gap-2 border border-[#E5E7EB] rounded-lg px-2 py-1.5 bg-white">
+                                    <Calendar size={13} className="text-[#6B7280]" />
+                                    <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="text-[12px] text-[#243463] outline-none cursor-pointer bg-transparent" title="Start Date" />
+                                    <span className="text-[#6B7280] text-[12px]">to</span>
+                                    <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="text-[12px] text-[#243463] outline-none cursor-pointer bg-transparent" title="End Date" />
+                                </div>
+
                                 <div className="flex items-center border border-[#E5E7EB] rounded-lg px-2 py-1.5 bg-white">
-                                    <Filter size={13} className="text-[#6B7280] mr-1.5" />
-                                    <select value={selectedMarketplace} onChange={(e) => setSelectedMarketplace(e.target.value)} className="bg-transparent border-none outline-none text-[12px] text-[#243463] cursor-pointer">
-                                        {uniqueMarketplaces.map((mp, i) => <option key={i} value={mp}>{mp === 'All' ? 'Platform: All' : mp}</option>)}
+                                    <select value={paymentFilter} onChange={(e) => setPaymentFilter(e.target.value)} className="bg-transparent border-none outline-none text-[12px] text-[#243463] cursor-pointer">
+                                        <option value="All">Payment: All</option>
+                                        <option value="Settled">Settled</option>
+                                        <option value="Pending">Pending</option>
                                     </select>
                                 </div>
-                            )}
 
-                            <div className="flex items-center gap-2 border border-[#E5E7EB] rounded-lg px-2 py-1.5 bg-white">
-                                <Calendar size={13} className="text-[#6B7280]" />
-                                <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="text-[12px] text-[#243463] outline-none cursor-pointer bg-transparent" title="Start Date" />
-                                <span className="text-[#6B7280] text-[12px]">to</span>
-                                <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="text-[12px] text-[#243463] outline-none cursor-pointer bg-transparent" title="End Date" />
-                            </div>
+                                <div className="flex items-center border border-[#E5E7EB] rounded-lg px-2 py-1.5 bg-white">
+                                    <select value={orderStatusFilter} onChange={(e) => setOrderStatusFilter(e.target.value)} className="bg-transparent border-none outline-none text-[12px] text-[#243463] cursor-pointer">
+                                        <option value="All">Status: All</option>
+                                        <option value="Delivered">Delivered</option>
+                                        <option value="Return">Return</option>
+                                        <option value="Pending">Pending</option>
+                                    </select>
+                                </div>
+                            </>
+                        )}
 
-                            <div className="flex items-center border border-[#E5E7EB] rounded-lg px-2 py-1.5 bg-white">
-                                <select value={paymentFilter} onChange={(e) => setPaymentFilter(e.target.value)} className="bg-transparent border-none outline-none text-[12px] text-[#243463] cursor-pointer">
-                                    <option value="All">Payment: All</option>
-                                    <option value="Settled">Settled</option>
-                                    <option value="Pending">Pending</option>
-                                </select>
-                            </div>
-
-                            <div className="flex items-center border border-[#E5E7EB] rounded-lg px-2 py-1.5 bg-white">
-                                <select value={orderStatusFilter} onChange={(e) => setOrderStatusFilter(e.target.value)} className="bg-transparent border-none outline-none text-[12px] text-[#243463] cursor-pointer">
-                                    <option value="All">Status: All</option>
-                                    <option value="Delivered">Delivered</option>
-                                    <option value="Return">Return</option>
-                                    <option value="Pending">Pending</option>
-                                </select>
-                            </div>
-
-                            {hasActiveFilters && (
-                                <button 
-                                    onClick={clearFilters}
-                                    className="flex items-center gap-1 text-[12px] font-semibold text-[#EF4444] hover:bg-[#EF4444]/10 px-2.5 py-1.5 rounded-lg transition-colors ml-auto"
-                                >
-                                    <XCircle size={14} /> Clear All
-                                </button>
-                            )}
-                        </div>
-                    )}
+                        {hasActiveFilters && (
+                            <button
+                                onClick={clearFilters}
+                                className="flex items-center gap-1 text-[12px] font-semibold text-[#EF4444] hover:bg-[#EF4444]/10 px-2.5 py-1.5 rounded-lg transition-colors ml-auto"
+                            >
+                                <XCircle size={14} /> Clear All
+                            </button>
+                        )}
+                    </div>
                 </div>
+                {/* --- DYNAMIC STAT CARDS --- */}
+                {!isProcessing && statsData && statsData.length > 1 && (
+                    <div className="flex flex-wrap gap-4 px-5 pb-5 pt-5 border-b border-[#E5E7EB] shrink-0 bg-white">
+                        {statsData.map((s) => {
+                            const isActive = activeTypeFilter === s.id;
+                            return (
+                                <div
+                                    key={s.label}
+                                    onClick={() => setActiveTypeFilter(s.id)}
+                                    className={`flex-1 min-w-[140px] rounded-xl p-4 border transition-all duration-200 cursor-pointer hover:-translate-y-0.5 hover:shadow-md 
+                                        ${isActive ? "bg-[#243463] border-[#243463] shadow-md text-white" : "bg-[#F8FAFC] border-[#E5E7EB] text-[#243463] hover:border-[#243463]/30"}
+                                    `}
+                                >
+                                    <div className={`text-[10px] font-bold tracking-widest mb-1 uppercase ${isActive ? "text-[#E5E7EB]" : "text-[#6B7280]"}`}>
+                                        {s.label}
+                                    </div>
+                                    <div className="text-2xl font-bold mb-0.5">{s.value}</div>
+                                    <div className={`text-[10px] leading-snug ${isActive ? "text-[#E5E7EB]/80" : "text-[#6B7280]"}`}>{s.desc}</div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
 
                 {/* --- TABLE AREA --- */}
                 <div className="overflow-x-auto overflow-y-auto custom-scrollbar flex-1 min-h-0 relative">
@@ -346,8 +575,7 @@ const Order = () => {
                                             return (
                                                 <tr key={idx} className="border-b border-[#E5E7EB] hover:bg-[#F8FAFC]/50 transition-colors">
                                                     <td className="py-3 px-4 text-[13px] text-[#6B7280]">{actualIndex}</td>
-                                                    
-                                                    {/* Styled Date for Settlement Preview */}
+
                                                     <td className="py-3 px-4 text-[13px] whitespace-nowrap">
                                                         <div className="flex items-center gap-1.5 bg-[#F8FAFC] border border-[#E5E7EB] px-2 py-1 rounded-md w-max">
                                                             <Calendar size={12} className="text-[#6B7280]" />
@@ -369,45 +597,58 @@ const Order = () => {
                                             );
                                         }
 
-                                        const invAmt = parseFloat(order["Invoice Amount"]) || 0;
-                                        const taxGross = parseFloat(order["Tax Exclusive Gross"]) || 0;
-                                        const totalTax = parseFloat(order["Total Tax Amount"]) || 0;
-                                        const settlementTotal = parseFloat(order["Settlement Total"]) || 0;
+                                        // --- DASHBOARD OR SALES PREVIEW RENDER ---
+                                        const oId = getVal(order, ['order id', 'order_id']);
+                                        const invDate = getVal(order, ['invoice date', 'order date', 'date']);
+                                        const skuVal = getVal(order, ['sku']);
+                                        const qtyVal = getVal(order, ['quantity', 'item quantity', 'qty']);
 
+                                        const invAmt = cleanAmt(getVal(order, ['invoice amount', 'total amount', 'price after discount']));
+                                        const taxGross = cleanAmt(getVal(order, ['tax exclusive gross', 'tax ex gross', 'taxable value']));
+                                        const totalTax = cleanAmt(getVal(order, ['total tax amount', 'total tax', 'tax']));
+
+                                        const settlementTotal = parseFloat(order["Settlement Total"]) || 0;
                                         const isSettled = settlementTotal !== 0;
                                         const oStatus = getOrderStatus(settlementTotal);
 
                                         return (
                                             <tr key={idx} className="border-b border-[#E5E7EB] hover:bg-[#F8FAFC]/50 transition-colors">
                                                 <td className="py-3 px-4 text-[13px] text-[#6B7280]">{actualIndex}</td>
-                                                
+
                                                 {mode === 'database' && (
-                                                    <td className="py-3 px-4 whitespace-nowrap">
-                                                        <span className="px-2.5 py-1 rounded-md font-semibold text-[11px] bg-[#243463]/10 text-[#243463]">
-                                                            {order["Marketplace"] || '-'}
-                                                        </span>
-                                                    </td>
+                                                    <>
+                                                        <td className="py-3 px-4 whitespace-nowrap">
+                                                            <span className="px-2.5 py-1 rounded-md font-semibold text-[11px] bg-[#243463]/10 text-[#243463]">
+                                                                {order["Marketplace"] || '-'}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-3 px-4 whitespace-nowrap">
+                                                            <span className="px-2.5 py-1 rounded-md font-semibold text-[11px] bg-blue-50 text-blue-600 border border-blue-100">
+                                                                {order["Report Type"] || '-'}
+                                                            </span>
+                                                        </td>
+                                                    </>
                                                 )}
 
-                                                <td className="py-3 px-4 text-[13px] font-semibold text-[#243463] whitespace-nowrap">{order["Order Id"] || '-'}</td>
-                                                
+                                                <td className="py-3 px-4 text-[13px] font-semibold text-[#243463] whitespace-nowrap">{oId === '-' ? '-' : oId}</td>
+
                                                 {/* --- STYLED INVOICE DATE --- */}
                                                 <td className="py-3 px-4 whitespace-nowrap">
                                                     <div className="flex items-center gap-1.5 bg-white border border-[#E5E7EB] px-2 py-1 rounded-md w-max shadow-sm">
                                                         <Calendar size={12} className="text-[#6B7280]" />
-                                                        <span className="font-medium text-[#243463] text-[12px]">{formatDate(order["Invoice Date"])}</span>
+                                                        <span className="font-medium text-[#243463] text-[12px]">{formatDate(invDate)}</span>
                                                     </div>
                                                 </td>
 
                                                 {/* --- STYLED SKU --- */}
                                                 <td className="py-3 px-4 text-[13px]">
                                                     <span className="font-mono text-[11px] bg-slate-100 border border-slate-200 px-2 py-1 rounded-md text-slate-700 whitespace-nowrap">
-                                                        {order["Sku"] || '-'}
+                                                        {skuVal === '-' ? '-' : skuVal}
                                                     </span>
                                                 </td>
-                                                
-                                                <td className="py-3 px-4 text-[13px] text-[#6B7280]">{order["Quantity"] || 0}</td>
-                                                
+
+                                                <td className="py-3 px-4 text-[13px] text-[#6B7280]">{qtyVal === '-' ? 0 : qtyVal}</td>
+
                                                 <td className={`py-3 px-4 text-[13px] font-medium ${getColorClass(invAmt)}`}>₹{invAmt.toFixed(2)}</td>
                                                 <td className={`py-3 px-4 text-[13px] font-medium ${getColorClass(taxGross)}`}>₹{taxGross.toFixed(2)}</td>
                                                 <td className={`py-3 px-4 text-[13px] font-medium ${getColorClass(totalTax)}`}>₹{totalTax.toFixed(2)}</td>
