@@ -146,24 +146,77 @@ const deleteReportType = async (req, res) => {
     }
 };
 
+
+// Ensure uploadDirectory path is correct based on your folder structure
+const uploadDirectory = path.join(__dirname, "../../client/public/upload");
+
 const uploadFileToDB = async (req, res) => {
     try {
-        const { marketplace_id, report_type_id } = req.body;
+        const { marketplace_id, report_type_id, report_category, sample_data } = req.body;
+
         if (!req.file) return errorResponse(res, 400, "Please upload a file");
         if (!marketplace_id || !report_type_id) return errorResponse(res, 400, "Marketplace ID and Report Type ID are required");
 
         const stored_file = req.file.filename;
 
-        // Query chalane ke baad hum result ko variable mein store karenge
+
+        if (req.body.sample_data && report_category) {
+            const sampleDataArray = JSON.parse(req.body.sample_data);
+
+            if (sampleDataArray.length > 0) {
+                const tableName = report_category === 'sales' ? 'sales_orders' : 'settlement_transactions';
+
+                // 500-500 ke tukdo (chunks) me check karenge taaki server par load na pade
+                const BATCH_SIZE = 500;
+                let isDuplicateFound = false;
+                let duplicateOrderId = "";
+
+                for (let i = 0; i < sampleDataArray.length; i += BATCH_SIZE) {
+                    const chunk = sampleDataArray.slice(i, i + BATCH_SIZE);
+                    const conditions = [];
+                    const values = [];
+
+                    chunk.forEach(item => {
+                        if (report_category === 'sales') {
+                            conditions.push(`(order_id = ? AND sku = ? AND quantity = ?)`);
+                            values.push(item.orderId, item.sku, item.qty);
+                        } else {
+                            conditions.push(`(order_id = ?)`);
+                            values.push(item.orderId);
+                        }
+                    });
+
+                    const query = `SELECT order_id FROM ${tableName} WHERE ${conditions.join(' OR ')} LIMIT 1`;
+                    const [existingOrders] = await db.query(query, values);
+
+                    if (existingOrders.length > 0) {
+                        isDuplicateFound = true;
+                        duplicateOrderId = existingOrders[0].order_id;
+                        break; // Loop wahin rok do
+                    }
+                }
+
+                if (isDuplicateFound) {
+                    const filePath = path.join(uploadDirectory, stored_file);
+                    if (fs.existsSync(filePath)) {
+                        fs.unlinkSync(filePath);
+                    }
+                    return errorResponse(res, 400, `Ye exact report (data) system mein pehle se maujood hai! (Found existing order: ${duplicateOrderId})`);
+                }
+            }
+        }
+        // ==========================================
+        // ==========================================
+
+        // Agar duplicate nahi mila, tabhi database me file ka naam save karo
         const [result] = await db.query(
             "INSERT INTO uploads (marketplace_id, report_type_id, stored_file) VALUES (?, ?, ?)",
             [marketplace_id, report_type_id, stored_file]
         );
 
-        // Naya Change: Frontend ko insertId (upload_id) bhejenge
         const responseData = {
             fileName: stored_file,
-            uploadId: result.insertId // Ye ID database mein data link karne ke kaam aayegi
+            uploadId: result.insertId
         };
         return successResponse(res, 200, "File uploaded and saved to database successfully", responseData);
 
@@ -195,14 +248,21 @@ const formatDateForDB = (dateString) => {
     }
 };
 
+// Backend Controller: Updated findValue function
 const findValue = (obj, possibleKeys) => {
+    if (!obj) return null;
+
     const lowerObj = {};
     for (let k in obj) {
-        lowerObj[k.toLowerCase().trim()] = obj[k];
+        // NAYA: Excel ke \n (Enter) aur double spaces ko single space banata hai
+        const cleanKey = String(k).toLowerCase().replace(/[\n\r]/g, ' ').replace(/\s+/g, ' ').trim();
+        lowerObj[cleanKey] = obj[k];
     }
+
     for (let pk of possibleKeys) {
-        if (lowerObj[pk.toLowerCase()] !== undefined && lowerObj[pk.toLowerCase()] !== '') {
-            return lowerObj[pk.toLowerCase()];
+        const cleanPk = String(pk).toLowerCase().replace(/[\n\r]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (lowerObj[cleanPk] !== undefined && lowerObj[cleanPk] !== '') {
+            return lowerObj[cleanPk];
         }
     }
     return null;
@@ -244,74 +304,99 @@ const saveMappedData = async (req, res) => {
         if (!orders || orders.length === 0) return errorResponse(res, 400, "No data to save");
         const BATCH_SIZE = 500;
 
-
         // ==========================================
-        // CASE 1: SALES REPORT
+        // CASE 1: SALES REPORT (Amazon + Flipkart Supported)
         // ==========================================
         if (reportType === 'sales') {
             const values = orders.map(order => {
-                // --- NAYA: Warehouse ID ka logic ---
-                let warehouseVal = findValue(order, ['warehouse id', 'fulfillment center']);
-                // Agar blank, '-', 'na' ya 'NA' ho toh 'crasome' set kar do
+                let warehouseVal = findValue(order, ['warehouse id', 'fulfillment center', 'warehouse']);
                 if (!warehouseVal || warehouseVal.trim() === '-' || warehouseVal.trim() === '' || warehouseVal.trim().toLowerCase() === 'na') {
                     warehouseVal = 'crasome';
                 }
 
+                // Flipkart ka tax calculation if direct total tax is missing
+                let totalTaxStr = findValue(order, ['total tax amount', 'tax']);
+                if (!totalTaxStr || totalTaxStr === '-') {
+                    const igst = parseFloat(findValue(order, ['igst amount', 'igst'])) || 0;
+                    const cgst = parseFloat(findValue(order, ['cgst amount', 'cgst'])) || 0;
+                    const sgst = parseFloat(findValue(order, ['sgst amount (or utgst as applicable)', 'sgst amount', 'sgst', 'utgst amount'])) || 0;
+
+                    totalTaxStr = (igst + cgst + sgst).toString();
+                }
+
+                // NAYA: Extract Buyer Details
+                const buyerName = findValue(order, ['buyer name', 'buyer', 'customer name']) || '-';
+                const buyerGst = findValue(order, ['customer bill to gstid', 'buyer gst', 'customer gstin', 'buyer gstin']) || '-';
+
                 return [
                     uploadId,
                     findValue(order, ['seller gstin', 'gstin']) || '-',
-                    formatDateForDB(findValue(order, ['invoice date', 'order date', 'Order Date'])),
+                    formatDateForDB(findValue(order, ['invoice date', 'order date'])),
                     cleanId(findValue(order, ['order id', 'order_item_id'])),
-                    findValue(order, ['transaction type', 'event type', 'type']) || 'Unknown',
-                    findValue(order, ['quantity', 'qty']) || 0,
+                    findValue(order, ['transaction type', 'event sub type', 'type']) || 'Unknown',
+                    findValue(order, ['quantity', 'qty', 'item quantity']) || 0,
                     findValue(order, ['item description', 'product name', 'description']) || '-',
                     findValue(order, ['asin', 'fsn']) || '-',
                     findValue(order, ['sku']) || '-',
                     findValue(order, ['ship from postal code', 'pincode', 'ship from pin']) || '-',
                     findValue(order, ['ship to city', 'customer city']) || '-',
-                    findValue(order, ['ship to state', 'customer state']) || '-',
-                    cleanAmount(findValue(order, ['invoice amount', 'total amount'])),
-                    cleanAmount(findValue(order, ['tax exclusive gross', 'taxable value'])),
-                    cleanAmount(findValue(order, ['total tax amount', 'tax'])),
-                    cleanAmount(findValue(order, ['item promo discount', 'discount', 'promo discount'])),                                                   
-
-                    warehouseVal // NAYA: Yahan updated warehouse pass kar diya
+                    findValue(order, ['ship to state', 'customer state', "customer's delivery state"]) || '-',
+                    cleanAmount(findValue(order, ['invoice amount', 'total amount', 'final invoice amount (price after discount+shipping charges)'])),
+                    cleanAmount(findValue(order, ['tax exclusive gross', 'taxable value', 'taxable value (final invoice amount -taxes)'])),
+                    cleanAmount(totalTaxStr),
+                    cleanAmount(findValue(order, ['item promo discount', 'discount', 'promo discount'])),
+                    warehouseVal,
+                    buyerName, // NAYA
+                    buyerGst   // NAYA
                 ];
             });
 
+            // NAYA: Query me buyer_name aur buyer_gstin add kiya
             const query = `
                 INSERT INTO sales_orders (
                     upload_id, seller_gstin, invoice_date, order_id, transaction_type, quantity, item_description, 
                     asin, sku, ship_from_pin, ship_to_city, ship_to_state, 
-                    invoice_amount, tax_ex_gross, total_tax_amount, promo_discount, warehouse_id
+                    invoice_amount, tax_ex_gross, total_tax_amount, promo_discount, warehouse_id,
+                    buyer_name, buyer_gstin
                 ) VALUES ?
             `;
             const chunks = chunkArray(values, BATCH_SIZE);
             for (let chunk of chunks) await db.query(query, [chunk]);
         }
-
-        // --- NAYA SETTLEMENT LOGIC (Nayi Columns Ke Sath) ---
+        // CASE 2: SETTLEMENT REPORT (Amazon + Flipkart Supported)
         else if (reportType === 'settlement') {
             const values = orders.map(order => {
-                const tDate = findValue(order, ['date/time', 'transaction date', 'date', 'invoice date']);
-                const oId = findValue(order, ['order id', 'order_id']);
-                const amt = findValue(order, ['total', 'amount', 'net amount']);
+                // 1. Date (Added 'payment date')
+                const tDate = findValue(order, ['payment date', 'date/time', 'transaction date', 'date', 'invoice date', 'order date']);
 
-                // Nayi columns ko excel header se map karna
-                // Nayi columns ko excel header se map karna
-                const totalSalesTax = findValue(order, [
-                    'total sales tax liable(gst before adjusting tcs)', // Exact match (bina space ke bracket)
-                    'total sales tax liable (gst before adjusting tcs)', // Agar bracket se pehle space ho
-                    'total sales tax liable',
-                    'gst before adjusting tcs',
-                    'total sales tax'
-                ]); const tcsCgst = findValue(order, ['tcs-cgst', 'tcs cgst']);
-                const tcsSgst = findValue(order, ['tcs-sgst', 'tcs sgst']);
-                const tcsIgst = findValue(order, ['tcs-igst', 'tcs igst']);
-                const tds = findValue(order, ['tds', 'section 194-o', '194-o', 'tds (section 194-o)']);
-                const sellingFees = findValue(order, ['selling fees', 'selling fee', 'commission']);
-                const fbaFees = findValue(order, ['fba fees', 'fba fee']);
-                const otherFees = findValue(order, ['other transaction fees', 'other fees']);
+                // 2. Order ID
+                const oId = findValue(order, ['order id', 'order_id', 'settlement_ref_no']);
+
+                // 3. Net Amount (Added Bank Settlement Value)
+                const amt = findValue(order, ['bank settlement value (rs.) = sum(j:r)', 'Bank Settlement Value (Rs.) = SUM(J:R)', 'bank settlement value (rs.)', 'bank settlement value', 'total', 'amount', 'net amount', 'total amount']);
+
+                // 4. Taxes (Added Flipkart Specific TCS/TDS names)
+                const totalSalesTax = findValue(order, ['total sales tax liable(gst before adjusting tcs)', 'total sales tax liable (gst before adjusting tcs)', 'total sales tax liable', 'gst before adjusting tcs', 'total sales tax']);
+                const tcsCgst = findValue(order, ['tcs-cgst', 'tcs cgst', 'cgst amount', 'cgst']);
+                const tcsSgst = findValue(order, ['tcs-sgst', 'tcs sgst', 'sgst amount', 'sgst']);
+                const tcsIgst = findValue(order, ['tcs-igst', 'tcs igst', 'igst amount', 'igst', 'tcs (rs.)']); // TCS (Rs.)
+                const tds = findValue(order, ['tds (rs.)', 'tds', 'section 194-o', '194-o', 'tds (section 194-o)']); // TDS (Rs.)
+
+                // 5. Commission
+                const sellingFees = findValue(order, ['commission (rs.)', 'commission', 'selling fees', 'selling fee', 'marketplace fee']);
+
+                // 6. Shipping + Pick Pack (FBA Fees) - ParseFloat lagaya hai taaki Math(Addition) theek se ho
+                const amzFba = parseFloat(cleanAmount(findValue(order, ['fba fees', 'fba fee', 'shipping fee', 'shipping']))) || 0;
+                const pickPack = parseFloat(cleanAmount(findValue(order, ['pick and pack fee (rs.)', 'pick and pack fee']))) || 0;
+                const flipkartShip = parseFloat(cleanAmount(findValue(order, ['shipping fee (rs.)']))) || 0;
+                const reverseShip = parseFloat(cleanAmount(findValue(order, ['reverse shipping fee (rs.)', 'reverse shipping fee']))) || 0;
+                const fbaFees = amzFba + pickPack + flipkartShip + reverseShip;
+
+                // 7. Closing Fees (Fixed Fee)
+                const otherFees = findValue(order, ['fixed fee (rs.)', 'Fixed Fee  (Rs.)', 'fixed fee', 'other transaction fees', 'other fees']);
+
+                // 8. Collection Fees (New Database Column)
+                const collectionFees = findValue(order, ['collection fee (rs.)', 'collection fee']);
 
                 return [
                     uploadId,
@@ -324,8 +409,9 @@ const saveMappedData = async (req, res) => {
                     cleanAmount(tcsIgst),
                     cleanAmount(tds),
                     cleanAmount(sellingFees),
-                    cleanAmount(fbaFees),
-                    cleanAmount(otherFees)
+                    fbaFees, // Ye already number hai upar sum karne ke baad
+                    cleanAmount(otherFees),
+                    cleanAmount(collectionFees)
                 ];
             });
 
@@ -333,7 +419,7 @@ const saveMappedData = async (req, res) => {
                 INSERT INTO settlement_transactions (
                     upload_id, transaction_date, order_id, amount, 
                     total_sales_tax, tcs_cgst, tcs_sgst, tcs_igst, tds, 
-                    selling_fees, fba_fees, other_transaction_fees
+                    selling_fees, fba_fees, other_transaction_fees, collection_fees
                 ) VALUES ?
             `;
             const chunks = chunkArray(values, BATCH_SIZE);
@@ -349,7 +435,7 @@ const saveMappedData = async (req, res) => {
     }
 };
 
-// --- UPDATE 2: getReconciledOrders FUNCTION (Sari Columns ka SUM hoga idhar) ---
+// --- UPDATE 2: getReconciledOrders FUNCTION ---
 const getReconciledOrders = async (req, res) => {
     try {
         const query = `
@@ -365,17 +451,22 @@ const getReconciledOrders = async (req, res) => {
                 s.tax_ex_gross AS 'Tax Exclusive Gross',
                 s.total_tax_amount AS 'Total Tax Amount',
                 
-                COALESCE(SUM(t.total_sales_tax), 0) AS 'Sales Tax',
-                COALESCE(SUM(t.tcs_cgst), 0) AS 'TCS-CGST',
-                COALESCE(SUM(t.tcs_sgst), 0) AS 'TCS-SGST',
-                COALESCE(SUM(t.tcs_igst), 0) AS 'TCS-IGST',
-                COALESCE(SUM(t.tds), 0) AS 'TDS',
-                COALESCE(SUM(t.selling_fees), 0) AS 'Selling Fees',
-                COALESCE(SUM(t.fba_fees), 0) AS 'FBA Fees',
-                COALESCE(SUM(t.other_transaction_fees), 0) AS 'Other Fees',
+                s.buyer_name AS 'Buyer Name',    
+                s.buyer_gstin AS 'Buyer GSTIN', 
+                s.warehouse_id AS 'Warehouse ID', 
 
-                COALESCE(SUM(t.amount), 0) AS 'Settlement Total',
-                (COALESCE(SUM(t.amount), 0) - s.invoice_amount) AS 'Difference'
+                COALESCE(t.total_sales_tax, 0) AS 'Sales Tax',
+                COALESCE(t.tcs_cgst, 0) AS 'TCS-CGST',
+                COALESCE(t.tcs_sgst, 0) AS 'TCS-SGST',
+                COALESCE(t.tcs_igst, 0) AS 'TCS-IGST',
+                COALESCE(t.tds, 0) AS 'TDS',
+                COALESCE(t.selling_fees, 0) AS 'Selling Fees',
+                COALESCE(t.fba_fees, 0) AS 'FBA Fees',
+                COALESCE(t.other_transaction_fees, 0) AS 'Other Fees',
+                COALESCE(t.collection_fees, 0) AS 'Collection Fees', 
+
+                COALESCE(t.amount, 0) AS 'Settlement Total',
+                (COALESCE(t.amount, 0) - s.invoice_amount) AS 'Difference'
             FROM 
                 sales_orders s
             LEFT JOIN 
@@ -384,10 +475,22 @@ const getReconciledOrders = async (req, res) => {
                 marketplaces m ON u.marketplace_id = m.id
             LEFT JOIN 
                 report_types r ON u.report_type_id = r.id
-            LEFT JOIN 
-                settlement_transactions t ON TRIM(s.order_id) = TRIM(t.order_id)
-            GROUP BY 
-                s.id, m.name, r.name, s.order_id, s.invoice_date, s.transaction_type, s.sku, s.quantity, s.invoice_amount, s.tax_ex_gross, s.total_tax_amount
+            LEFT JOIN (
+                SELECT 
+                    order_id,
+                    SUM(total_sales_tax) AS total_sales_tax,
+                    SUM(tcs_cgst) AS tcs_cgst,
+                    SUM(tcs_sgst) AS tcs_sgst,
+                    SUM(tcs_igst) AS tcs_igst,
+                    SUM(tds) AS tds,
+                    SUM(selling_fees) AS selling_fees,
+                    SUM(fba_fees) AS fba_fees,
+                    SUM(other_transaction_fees) AS other_transaction_fees,
+                    SUM(collection_fees) AS collection_fees,
+                    SUM(amount) AS amount
+                FROM settlement_transactions
+                GROUP BY order_id
+            ) t ON s.order_id = t.order_id 
             ORDER BY 
                 s.invoice_date DESC
         `;
@@ -447,6 +550,53 @@ const deleteUpload = async (req, res) => {
     }
 };
 
+// --- UPDATED FUNCTION: API Crash Fix Ke Sath ---
+const getOrderTransactions = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+
+        // Sales Table se data
+        const [sales] = await db.query(`
+            SELECT 
+                transaction_type AS 'Type', 
+                DATE_FORMAT(invoice_date, '%d-%m-%Y') AS 'Date', 
+                invoice_amount AS 'Amount', 
+                sku AS 'sku', 
+                quantity AS 'quantity',
+                tax_ex_gross AS 'Taxable',
+                total_tax_amount AS 'Tax',
+                warehouse_id AS 'Warehouse ID' -- NAYA
+            FROM sales_orders WHERE TRIM(order_id) = TRIM(?)
+        `, [orderId]);
+
+        // Settlement Table se data (Error Fix: Bad columns ki jagah 0 pass kiya)
+        const [settlements] = await db.query(`
+            SELECT 
+                'Settlement' AS 'Type', 
+                DATE_FORMAT(transaction_date, '%d-%m-%Y') AS 'Date', 
+                amount AS 'Amount', 
+                '-' AS 'sku', 
+                0 AS 'quantity',
+                0 AS 'product_sales',          
+                0 AS 'promotional_rebates', 
+                COALESCE(selling_fees, 0) AS 'Commission',
+                COALESCE(fba_fees, 0) AS 'ShippingFee',
+                COALESCE(other_transaction_fees, 0) AS 'OtherFees',
+                COALESCE(tds, 0) AS 'TDS',
+                (COALESCE(tcs_cgst, 0) + COALESCE(tcs_sgst, 0) + COALESCE(tcs_igst, 0)) AS 'TCS',
+                COALESCE(total_sales_tax, 0) AS 'PlatformTax'
+            FROM settlement_transactions WHERE TRIM(order_id) = TRIM(?)
+        `, [orderId]);
+
+        const allTransactions = [...sales, ...settlements];
+        return successResponse(res, 200, "Transactions fetched successfully", allTransactions);
+    } catch (error) {
+        console.log(error);
+        return errorResponse(res, 500, "Failed to fetch transactions", error.message);
+    }
+};
+
+
 module.exports = {
     getCompanies,
     getMarketplaces,
@@ -462,5 +612,6 @@ module.exports = {
     getFileUploads,
     deleteUpload,
     saveMappedData,
-    getReconciledOrders
+    getReconciledOrders,
+    getOrderTransactions
 };

@@ -16,7 +16,8 @@ const {
     getFileUploads,
     deleteUpload,
     saveMappedData,
-    getReconciledOrders
+    getReconciledOrders,
+    getOrderTransactions
 } = require("../../controllers/upload/upload");
 
 const upload = require("../../middleware/multer");
@@ -27,6 +28,8 @@ router.get("/getMarketplaces", getMarketplaces);
 router.get("/getReportTypes", getReportTypes);
 router.get("/getUploads", getFileUploads);
 router.get('/getReconciledOrders', getReconciledOrders)
+
+router.get('/getOrderTransactions/:orderId', getOrderTransactions);
 
 // POST Routes (Add)
 router.post("/addCompany", addCompany);

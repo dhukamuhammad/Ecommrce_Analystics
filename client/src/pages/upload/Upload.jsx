@@ -169,14 +169,35 @@ const Upload = () => {
         if (e.target.files && e.target.files[0]) setSelectedFile(e.target.files[0]);
     };
 
+
+
     // Actual upload backend API aur navigation idhar hoga
     const processFinalUpload = async (mappedData) => {
         setIsUploading(true);
         try {
+            // Report type (Sales ya Settlement) pehle define kar lete hain
+            const isSettlement = selectedReportType.name.toLowerCase().includes('settlement') || selectedReportType.name.toLowerCase().includes('transaction');
+            const reportCategory = isSettlement ? 'settlement' : 'sales';
+
+            // --- NAYA: Exact combination (Order ID, SKU, Qty) ka sample frontend se hi bhej do ---
+            // Pehle ye tha:
+            // const sampleData = mappedData.slice(0, 50).map(...)
+
+            // Ab ye kar dein (Saare records check honge):
+            const sampleData = mappedData.map(o => ({
+                orderId: String(o["Order Id"] || o["order id"] || o["order_item_id"] || o["settlement_ref_no"] || '').trim(),
+                sku: String(o["SKU"] || o["sku"] || o["seller sku"] || '').trim(),
+                qty: parseFloat(o["Quantity"] || o["qty"] || o["item quantity"]) || 0
+            })).filter(o => o.orderId && o.orderId !== '-');
+
             const formData = new FormData();
             formData.append('file', selectedFile);
             formData.append('marketplace_id', selectedMarketplace.id);
             formData.append('report_type_id', selectedReportType.id);
+
+            // Backend ko table naam pata chalne ke liye aur data check karne ke liye ye bhejna zaroori hai
+            formData.append('report_category', reportCategory);
+            formData.append('sample_data', JSON.stringify(sampleData));
 
             const response = await api.post('/uploadFile', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
@@ -184,19 +205,21 @@ const Upload = () => {
 
             if (response.data.success) {
                 alert('File uploaded successfully!');
-                const isSettlement = selectedReportType.name.toLowerCase().includes('settlement') || selectedReportType.name.toLowerCase().includes('transaction');
-
                 navigate('/order', {
                     state: {
                         previewData: mappedData,
                         uploadId: response.data.data.uploadId,
-                        reportCategory: isSettlement ? 'settlement' : 'sales'
+                        reportCategory: reportCategory
                     }
                 });
             }
         } catch (error) {
             console.error("Upload error:", error);
-            alert("Error uploading file to database!");
+            if (error.response && error.response.data && error.response.data.message) {
+                alert(`❌ ${error.response.data.message}`);
+            } else {
+                alert("Error uploading file to database!");
+            }
         } finally {
             setIsUploading(false);
             setValidationModal({ isOpen: false, errors: [], pendingData: null });
@@ -212,8 +235,50 @@ const Upload = () => {
             reader.onload = async (e) => {
                 const data = new Uint8Array(e.target.result);
                 const workbook = XLSX.read(data, { type: 'array' });
-                const sheetName = workbook.SheetNames[0];
-                const rawJsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { raw: false, defval: "" });
+
+                // ==========================================
+                // --- SMART MULTI-SHEET LOGIC (FLIPKART) ---
+                // ==========================================
+                let sheetName = workbook.SheetNames[0];
+
+                if (workbook.SheetNames.length > 1) {
+                    const targetSheet = workbook.SheetNames.find(name =>
+                        name.toLowerCase().trim() === 'orders' ||
+                        name.toLowerCase().trim() === 'order' ||
+                        name.toLowerCase().trim() === 'sales report'
+                    );
+
+                    if (targetSheet) {
+                        sheetName = targetSheet;
+                    } else if (selectedMarketplace?.name?.toLowerCase().includes('flipkart') && !selectedReportType?.name?.toLowerCase().includes('settlement')) {
+                        alert("❌ Is Excel file mein 'Orders' naam ki tab nahi mili! Kripya sahi Transaction Report upload karein.");
+                        setIsUploading(false);
+                        return;
+                    }
+                }
+
+                // Pehle normally file read karo
+                let rawJsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { raw: false, defval: "" });
+
+                // ==========================================
+                // --- NAYA: SMART HEADER ROW DETECTION ---
+                // Flipkart ki files me actual headers 2nd row me hote hain, isse library unko pehchan legi
+                // ==========================================
+                let headerRowIndex = 0;
+                for (let i = 0; i < Math.min(10, rawJsonData.length); i++) {
+                    const rowValues = Object.values(rawJsonData[i]).map(v => String(v).toLowerCase().trim());
+                    // Check karo kis row me "Order ID" likha hai
+                    if (rowValues.includes('order id') || rowValues.includes('order_id') || rowValues.includes('order item id') || rowValues.includes('settlement_ref_no')) {
+                        headerRowIndex = i + 1; // Ye row actual header hai
+                        break;
+                    }
+                }
+
+                if (headerRowIndex > 0) {
+                    // Agar header doosri/teesri line me mila, toh oopar ka kachra hata kar re-read karo
+                    rawJsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { raw: false, defval: "", range: headerRowIndex });
+                }
+                // ==========================================
 
                 if (rawJsonData.length === 0) {
                     alert("File is empty!");
@@ -221,12 +286,13 @@ const Upload = () => {
                     return;
                 }
 
-                // ==========================================
-                // --- NAYA: HEADER VALIDATION LOGIC START ---
-                // ==========================================
+                // ... BAAKI KA VALIDATION AUR UPLOAD LOGIC SAME RAHEGA ...
                 const fileHeaders = Object.keys(rawJsonData[0]);
                 const normalizeText = (text) => String(text).toLowerCase().replace(/[^a-z0-9]/g, '');
                 const normalizedFileHeaders = fileHeaders.map(normalizeText);
+
+                // ... (Aapka baaki ka aage ka upload ka code waisa hi rahega)
+                // (Validation, mappedData and processFinalUpload)
 
                 const reportName = selectedReportType.name;
                 const rules = REPORT_VALIDATION_RULES[reportName];
@@ -268,13 +334,15 @@ const Upload = () => {
 
                     for (let i = 0; i < rawJsonData.length; i++) {
                         const row = rawJsonData[i];
-                        const oid = getVal(row, ['order id', 'order_id']);
-                        const sku = getVal(row, ['sku']);
+                        // NAYA: Flipkart ke column names (order_item_id, final invoice amount, etc.) add kar diye
+                        const oid = getVal(row, ['order id', 'order_id', 'order_item_id', 'order item id', 'settlement_ref_no']);
+                        const sku = getVal(row, ['sku', 'seller sku']);
                         const qty = getVal(row, ['quantity', 'qty', 'item quantity']);
-                        const invAmt = getVal(row, ['invoice amount', 'total amount', 'price after discount', 'price after discount (price before discount-total discount)']);
+                        const invAmt = getVal(row, ['invoice amount', 'total amount', 'price after discount', 'price after discount (price before discount-total discount)', 'final invoice amount (price after discount+shipping charges)']);
                         const taxGross = getVal(row, ['tax ex gross', 'tax exclusive gross', 'taxable value', 'taxable value (final invoice amount -taxes)']);
-                        const totalTax = getVal(row, ['total tax amount', 'total tax', 'tax']);
 
+                        // Validation pass karne ke liye 'igst amount' daal diya hai (Kyunki Flipkart me Total Tax column nahi hota)
+                        const totalTax = getVal(row, ['total tax amount', 'total tax', 'tax', 'igst amount', 'igst']);
                         const rowNum = i + 2;
 
                         if (!oid || String(oid).trim() === '-' || String(oid).trim() === '') validationErrors.push(`Row ${rowNum}: Order ID missing.`);
@@ -317,7 +385,6 @@ const Upload = () => {
             setIsUploading(false);
         }
     };
-
     return (
         <div className="p-6 flex flex-col  min-w-0 min-h-[calc(100vh-100px)] gap-6">
 
