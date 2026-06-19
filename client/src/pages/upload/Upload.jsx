@@ -197,7 +197,7 @@ const Upload = () => {
 
             // Backend ko table naam pata chalne ke liye aur data check karne ke liye ye bhejna zaroori hai
             formData.append('report_category', reportCategory);
-            formData.append('sample_data', JSON.stringify(sampleData));
+            // formData.append('sample_data', JSON.stringify(sampleData));
 
             const response = await api.post('/uploadFile', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
@@ -229,6 +229,73 @@ const Upload = () => {
     const handleUploadSubmit = async () => {
         if (!selectedFile || !selectedMarketplace || !selectedReportType) return;
         setIsUploading(true);
+
+        // ==========================================
+        // --- NAYA LOGIC: ADS SPEND DIRECT UPLOAD ---
+        // ==========================================
+        const reportNameLower = selectedReportType.name.toLowerCase();
+
+        if (reportNameLower.includes('ad spend') || reportNameLower.includes('ads spend')) {
+            try {
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+                formData.append('marketplace_id', selectedMarketplace.id);
+                formData.append('report_type_id', selectedReportType.id);
+
+                // Direct nayi API par hit
+                const response = await api.post('/upload-ad-spend', formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' }
+                });
+
+                if (response.data.success) {
+                    alert('Ads Spend Report uploaded and saved directly to database!');
+                    // Form reset kar do ya success state dikha do (Navigate NAHI karna hai)
+                    setSelectedFile(null);
+                }
+            } catch (error) {
+                console.error("Upload error:", error);
+
+                // NAYA: Backend se aane wala exact error message catch karke alert me dikhana
+                if (error.response && error.response.data && error.response.data.message) {
+                    alert(`❌ ${error.response.data.message}`);
+                } else {
+                    alert("❌ Error uploading Ads Spend file!");
+                }
+            } finally {
+                setIsUploading(false);
+            }
+            return; // Yahan se function wapas chala jayega, aage ka order wala lamba code run nahi hoga
+        }
+        else if (reportNameLower.includes('storage') || reportNameLower.includes('storage fee')) {
+            try {
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+                formData.append('marketplace_id', selectedMarketplace.id);
+                formData.append('report_type_id', selectedReportType.id);
+
+                // Direct nayi API par hit
+                const response = await api.post('/upload-storage-fee', formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' }
+                });
+
+                if (response.data.success) {
+                    alert('✅ Storage Fee Report uploaded and saved directly to database!');
+                    setSelectedFile(null); // File upload hone ke baad input clear kar do
+                }
+            } catch (error) {
+                console.error("Upload error:", error);
+                // Backend se aane wala exact error message catch karke alert me dikhana
+                if (error.response && error.response.data && error.response.data.message) {
+                    alert(`❌ ${error.response.data.message}`);
+                } else {
+                    alert("❌ Error uploading Storage Fee file!");
+                }
+            } finally {
+                setIsUploading(false);
+            }
+            return; // Yahan se function wapas chala jayega, aage ka lamba Excel reader wala code run nahi hoga
+        }
+        // ==========================================
 
         try {
             const reader = new FileReader();
@@ -385,6 +452,7 @@ const Upload = () => {
             setIsUploading(false);
         }
     };
+
     return (
         <div className="p-6 flex flex-col  min-w-0 min-h-[calc(100vh-100px)] gap-6">
 

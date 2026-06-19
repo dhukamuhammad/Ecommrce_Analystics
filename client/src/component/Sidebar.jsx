@@ -10,26 +10,26 @@ const navItems = [
     {
         label: 'Overview',
         links: [
-            { to: '/dashboard',  name: 'Dashboard',   icon: <LayoutDashboard size={17} />, badge: null, badgeNew: false },
-            { to: '/analytics',  name: 'Analytics',   icon: <BarChart2       size={17} />, badge: null, badgeNew: true  },
+            { to: '/dashboard', name: 'Dashboard', icon: <LayoutDashboard size={17} />, badge: null, badgeNew: false },
+            { to: '/analytics', name: 'Analytics', icon: <BarChart2 size={17} />, badge: null, badgeNew: true },
         ],
     },
     {
         label: 'Store',
         links: [
-            { to: '/upload',     name: 'Upload Data', icon: <Upload       size={17} />, badge: null, badgeNew: false },
-            { to: '/order',      name: 'Order',       icon: <ShoppingBag  size={17} />, badge: null, badgeNew: false },
-            { to: '/products',   name: 'Products',    icon: <Box          size={17} />, badge: null, badgeNew: false },
-            { to: '/customers',  name: 'Customers',   icon: <Users        size={17} />, badge: null, badgeNew: false },
-            { to: '/coupons',    name: 'Coupons',     icon: <Tag          size={17} />, badge: null, badgeNew: false },
+            { to: '/upload', name: 'Upload Data', icon: <Upload size={17} />, badge: null, badgeNew: false },
+            { to: '/order', name: 'Order', icon: <ShoppingBag size={17} />, badge: null, badgeNew: false },
+            { to: '/sku', name: 'SKU Wise', icon: <Box size={17} />, badge: null, badgeNew: false },
+            { to: '/customers', name: 'Customers', icon: <Users size={17} />, badge: null, badgeNew: false },
+            { to: '/coupons', name: 'Coupons', icon: <Tag size={17} />, badge: null, badgeNew: false },
         ],
     },
     {
         label: 'Insights',
         links: [
-            { to: '/revenue',     name: 'Revenue',     icon: <TrendingUp   size={17} />, badge: null, badgeNew: false },
-            { to: '/reports',     name: 'Reports',     icon: <FileBarChart size={17} />, badge: null, badgeNew: false },
-            { to: '/performance', name: 'Performance', icon: <MonitorDot   size={17} />, badge: null, badgeNew: false },
+            { to: '/revenue', name: 'Revenue', icon: <TrendingUp size={17} />, badge: null, badgeNew: false },
+            { to: '/reports', name: 'Reports', icon: <FileBarChart size={17} />, badge: null, badgeNew: false },
+            { to: '/performance', name: 'Performance', icon: <MonitorDot size={17} />, badge: null, badgeNew: false },
         ],
     },
     {
@@ -50,9 +50,9 @@ const Sidebar = () => {
                     <div className="w-[38px] h-[38px] bg-[#FAC899] rounded-[10px] flex items-center justify-center shrink-0">
                         <svg width="22" height="22" fill="none" stroke="#243463" strokeWidth="2.2"
                             strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                            <path d="M3 3h2l.4 2M7 13h10l4-8H5.4"/>
-                            <circle cx="9" cy="21" r="1"/>
-                            <circle cx="20" cy="21" r="1"/>
+                            <path d="M3 3h2l.4 2M7 13h10l4-8H5.4" />
+                            <circle cx="9" cy="21" r="1" />
+                            <circle cx="20" cy="21" r="1" />
                         </svg>
                     </div>
                     <div>

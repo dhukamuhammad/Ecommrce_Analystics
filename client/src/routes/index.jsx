@@ -20,6 +20,7 @@ import DashboardRoute from './dashboard/DashboardRoute'
 import Layout from '../component/Layout'
 import UploadRoute from './upload/UploadRoute'
 import OrderRoute from './order/OrderRoute'
+import SkuRoute from './sku/SkuRoute'
 
 const RouteLayout = () => {
     return (
@@ -29,6 +30,7 @@ const RouteLayout = () => {
                 <Route path="/*" element={<DashboardRoute />} />
                 <Route path="/upload/*" element={<UploadRoute />} />
                 <Route path="/order/*" element={<OrderRoute />} />
+                <Route path="/sku/*" element={<SkuRoute />} />
             </Route>
         </Routes>
     )
