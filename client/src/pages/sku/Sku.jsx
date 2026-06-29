@@ -115,6 +115,7 @@ const Sku = () => {
 
             // NAYA: Raw Storage Fee
             const rawStorageFee = parseFloat(item.Total_Storage_Fee) || 0;
+            const rawPromoDiscount = parseFloat(item.Total_Promo_Discount) || 0;
 
             const proratedAdSpend = rawAdSpend * ratio;
             const proratedAdOrders = Math.round(rawAdOrders * ratio);
@@ -123,13 +124,17 @@ const Sku = () => {
             // NAYA: Prorated Storage Fee
             const proratedStorageFee = rawStorageFee * ratio;
 
+            // NAYA: Raw Promo Discount
+            const proratedPromoDiscount = rawPromoDiscount * ratio;
+
             return {
                 ...item,
                 Total_Ad_Spend: proratedAdSpend,
                 Ad_Orders: proratedAdOrders,
                 Organic_Orders: calculatedOrganicOrders,
                 // NAYA
-                Total_Storage_Fee: proratedStorageFee
+                Total_Storage_Fee: proratedStorageFee,
+                Total_Promo_Discount: proratedPromoDiscount
             };
         });
     }, [skuData, selectedMarketplace, searchTerm, startDate, endDate]); // Dependencies me dates add karni zaroori hain
@@ -325,6 +330,9 @@ const Sku = () => {
                                     <th className="sticky top-0 z-20 py-4 px-5 bg-[#F8FAFC] text-[11px] font-bold uppercase tracking-wider text-[#6B7280] text-right shadow-[0_1px_0_#E5E7EB] min-w-[120px] cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => handleSort('Total_Storage_Fee')}>
                                         Storage Fee {renderSortIcon('Total_Storage_Fee')}
                                     </th>
+                                    <th className="sticky top-0 z-20 py-4 px-5 bg-[#F8FAFC] text-[11px] font-bold uppercase tracking-wider text-[#6B7280] text-right shadow-[0_1px_0_#E5E7EB] min-w-[130px] cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => handleSort('Total_Promo_Discount')}>
+                                        Promo Discount {renderSortIcon('Total_Promo_Discount')}
+                                    </th>
                                 </tr>
                             </thead>
 
@@ -413,6 +421,9 @@ const Sku = () => {
                                             </td>
                                             <td className="py-3 px-5 text-[13px] font-bold text-red-500 text-right whitespace-nowrap">
                                                 -{formatCurrency(item.Total_Storage_Fee || 0)}
+                                            </td>
+                                            <td className="py-3 px-5 text-[13px] font-bold text-red-500 text-right whitespace-nowrap">
+                                                {formatCurrency(item.Total_Promo_Discount || 0)}
                                             </td>
                                         </tr>
                                     ))

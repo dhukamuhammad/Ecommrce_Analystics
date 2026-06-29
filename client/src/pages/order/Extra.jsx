@@ -807,3 +807,70 @@ const handleUploadSubmit = async () => {
 
                 // ... (Aapka baaki ka aage ka upload ka code waisa hi rahega)
                 // (Validation, mappedData and processFinalUpload)
+
+
+
+
+                                // Pehle normally file read karo
+                                // let rawJsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { raw: false, defval: "" });
+                
+                                // // ==========================================
+                                // // --- NAYA: SMART HEADER ROW DETECTION ---
+                                // // Flipkart ki files me actual headers 2nd row me hote hain, isse library unko pehchan legi
+                                // // ==========================================
+                                // let headerRowIndex = 0;
+                                // for (let i = 0; i < Math.min(10, rawJsonData.length); i++) {
+                                //     const rowValues = Object.values(rawJsonData[i]).map(v => String(v).toLowerCase().trim());
+                                //     // Check karo kis row me "Order ID" likha hai
+                                //     if (rowValues.includes('order id') || rowValues.includes('order_id') || rowValues.includes('order item id') || rowValues.includes('settlement_ref_no')) {
+                                //         headerRowIndex = i + 1; // Ye row actual header hai
+                                //         break;
+                                //     }
+                                // }
+                
+                                // if (headerRowIndex > 0) {
+                                //     // Agar header doosri/teesri line me mila, toh oopar ka kachra hata kar re-read karo
+                                //     rawJsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { raw: false, defval: "", range: headerRowIndex });
+                                // }
+                                // // ==========================================
+                
+                                // if (rawJsonData.length === 0) {
+                                //     alert("File is empty!");
+                                //     setIsUploading(false);
+                                //     return;
+                                // }
+                
+                                // // ... BAAKI KA VALIDATION AUR UPLOAD LOGIC SAME RAHEGA ...
+                                // const fileHeaders = Object.keys(rawJsonData[0]);
+                                // const normalizeText = (text) => String(text).toLowerCase().replace(/[^a-z0-9]/g, '');
+                                // const normalizedFileHeaders = fileHeaders.map(normalizeText);
+                
+                                // // ... (Aapka baaki ka aage ka upload ka code waisa hi rahega)
+                                // // (Validation, mappedData and processFinalUpload)
+                
+                                // const reportName = selectedReportType.name;
+                                // const rules = REPORT_VALIDATION_RULES[reportName];
+                
+                                // if (rules) {
+                                //     const requiredRules = rules.required || [];
+                                //     const forbiddenRules = rules.forbidden || [];
+                
+                                //     const hasRequired = requiredRules.every(reqHeader =>
+                                //         normalizedFileHeaders.some(fileHeader => fileHeader.includes(normalizeText(reqHeader)))
+                                //     );
+                
+                                //     const hasForbidden = forbiddenRules.some(forbHeader =>
+                                //         normalizedFileHeaders.some(fileHeader => fileHeader.includes(normalizeText(forbHeader)))
+                                //     );
+                
+                                //     if (!hasRequired || hasForbidden) {
+                                //         alert(`❌ WRONG FILE DETECTED! \nAapne "${reportName}" select kiya hai, par uploaded file is rule se valid nahi hai.\n\nTip: Please check if you uploaded the correct file.`);
+                                //         setIsUploading(false);
+                                //         return; // Yahan se aage processing nahi hogi
+                                //     }
+                                // }
+                
+                                // ==========================================
+                                // --- NAYA: SMART HEADER ROW DETECTION (IGNORE TOP TEXT) ---
+                                // Pehle file ko 2D array (list of rows) ke format me read karo taaki upar ka text safely check kar sakein
+                                // ==========================================

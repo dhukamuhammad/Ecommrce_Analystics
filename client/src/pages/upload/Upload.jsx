@@ -318,69 +318,65 @@ const Upload = () => {
                     if (targetSheet) {
                         sheetName = targetSheet;
                     } else if (selectedMarketplace?.name?.toLowerCase().includes('flipkart') && !selectedReportType?.name?.toLowerCase().includes('settlement')) {
-                        alert("❌ Is Excel file mein 'Orders' naam ki tab nahi mili! Kripya sahi Transaction Report upload karein.");
-                        setIsUploading(false);
-                        return;
+                        // Flipkart: last resort — skip 'help' type sheets, pick first real data sheet
+                        const nonHelpSheet = workbook.SheetNames.find(name => {
+                            const n = name.toLowerCase().trim();
+                            return n !== 'help' && n !== 'instructions' && n !== 'read me' && n !== 'readme';
+                        });
+                        if (nonHelpSheet) {
+                            sheetName = nonHelpSheet;
+                        } else {
+                            alert("❌ Is Excel file mein 'Orders' naam ki tab nahi mili! Kripya sahi Transaction Report upload karein.");
+                            setIsUploading(false);
+                            return;
+                        }
                     }
                 }
 
-                // Pehle normally file read karo
-                let rawJsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { raw: false, defval: "" });
+                // ==========================================
+                // FLIPKART FIX: !ref ko actual cell bounds se fix karo
+                // (Flipkart files me !ref galat/1-row hota hai)
+                // Sirf cell keys scan karke real last row/col dhundho — fast!
+                // ==========================================
+                const sheet = workbook.Sheets[sheetName];
+                let maxRow = 0;
+                let maxCol = 0;
+                Object.keys(sheet).forEach(key => {
+                    if (key[0] === '!') return;
+                    try {
+                        const decoded = XLSX.utils.decode_cell(key);
+                        if (decoded.r > maxRow) maxRow = decoded.r;
+                        if (decoded.c > maxCol) maxCol = decoded.c;
+                    } catch (_) {}
+                });
+                sheet['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: maxRow, c: maxCol } });
+                // ==========================================
 
-                // ==========================================
-                // --- NAYA: SMART HEADER ROW DETECTION ---
-                // Flipkart ki files me actual headers 2nd row me hote hain, isse library unko pehchan legi
-                // ==========================================
+                let tempArray = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "" });
+
                 let headerRowIndex = 0;
-                for (let i = 0; i < Math.min(10, rawJsonData.length); i++) {
-                    const rowValues = Object.values(rawJsonData[i]).map(v => String(v).toLowerCase().trim());
-                    // Check karo kis row me "Order ID" likha hai
-                    if (rowValues.includes('order id') || rowValues.includes('order_id') || rowValues.includes('order item id') || rowValues.includes('settlement_ref_no')) {
-                        headerRowIndex = i + 1; // Ye row actual header hai
+
+                // Shuru ki 20 lines (rows) scan karo ki asali header kahan chhupa hai
+                for (let i = 0; i < Math.min(20, tempArray.length); i++) {
+                    if (!tempArray[i] || tempArray[i].length === 0) continue;
+
+                    const rowValues = tempArray[i].map(v => String(v).toLowerCase().trim());
+
+                    // Jahaan inme se koi bhi word mil jaye, wahi humara actual header hai
+                    if (rowValues.includes('order id') || rowValues.includes('order_id') || rowValues.includes('order item id') || rowValues.includes('settlement_ref_no') || rowValues.includes('date/time')) {
+                        headerRowIndex = i;
                         break;
                     }
                 }
 
-                if (headerRowIndex > 0) {
-                    // Agar header doosri/teesri line me mila, toh oopar ka kachra hata kar re-read karo
-                    rawJsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { raw: false, defval: "", range: headerRowIndex });
-                }
+                // Ab us kachre (top text) ko skip karke, sahi row se file ko proper JSON format me read karo
+                let rawJsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { raw: false, defval: "", range: headerRowIndex });
                 // ==========================================
 
                 if (rawJsonData.length === 0) {
-                    alert("File is empty!");
+                    alert("File is empty or invalid data format!");
                     setIsUploading(false);
                     return;
-                }
-
-                // ... BAAKI KA VALIDATION AUR UPLOAD LOGIC SAME RAHEGA ...
-                const fileHeaders = Object.keys(rawJsonData[0]);
-                const normalizeText = (text) => String(text).toLowerCase().replace(/[^a-z0-9]/g, '');
-                const normalizedFileHeaders = fileHeaders.map(normalizeText);
-
-                // ... (Aapka baaki ka aage ka upload ka code waisa hi rahega)
-                // (Validation, mappedData and processFinalUpload)
-
-                const reportName = selectedReportType.name;
-                const rules = REPORT_VALIDATION_RULES[reportName];
-
-                if (rules) {
-                    const requiredRules = rules.required || [];
-                    const forbiddenRules = rules.forbidden || [];
-
-                    const hasRequired = requiredRules.every(reqHeader =>
-                        normalizedFileHeaders.some(fileHeader => fileHeader.includes(normalizeText(reqHeader)))
-                    );
-
-                    const hasForbidden = forbiddenRules.some(forbHeader =>
-                        normalizedFileHeaders.some(fileHeader => fileHeader.includes(normalizeText(forbHeader)))
-                    );
-
-                    if (!hasRequired || hasForbidden) {
-                        alert(`❌ WRONG FILE DETECTED! \nAapne "${reportName}" select kiya hai, par uploaded file is rule se valid nahi hai.\n\nTip: Please check if you uploaded the correct file.`);
-                        setIsUploading(false);
-                        return; // Yahan se aage processing nahi hogi
-                    }
                 }
                 // ==========================================
                 // --- HEADER VALIDATION LOGIC END ---

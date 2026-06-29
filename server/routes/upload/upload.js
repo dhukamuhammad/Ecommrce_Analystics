@@ -17,7 +17,11 @@ const {
     deleteUpload,
     saveMappedData,
     getReconciledOrders,
-    getOrderTransactions
+    getOrderTransactions,
+    getSkuWiseData,
+    uploadAdSpendReport,
+    getSkuTimelineData,
+    uploadStorageFeeReport
 } = require("../../controllers/upload/upload");
 
 const upload = require("../../middleware/multer");
@@ -28,6 +32,8 @@ router.get("/getMarketplaces", getMarketplaces);
 router.get("/getReportTypes", getReportTypes);
 router.get("/getUploads", getFileUploads);
 router.get('/getReconciledOrders', getReconciledOrders)
+router.get('/sku-analytics', getSkuWiseData);
+router.get('/sku-timeline', getSkuTimelineData)
 
 router.get('/getOrderTransactions/:orderId', getOrderTransactions);
 
@@ -47,6 +53,8 @@ router.delete("/deleteUpload/:id", deleteUpload);
 
 // Upload Route
 router.post("/uploadFile", upload.single("file"), uploadFileToDB);
+router.post('/upload-ad-spend', upload.single('file'), uploadAdSpendReport)
+router.post('/upload-storage-fee', upload.single('file'), uploadStorageFeeReport);
 router.post("/saveMappedData", saveMappedData);
 
 module.exports = router;
